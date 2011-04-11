@@ -287,8 +287,6 @@ function formatter_settings_ahah() {
         break;
 
       case 'update':
-        $errors = form_set_error();
-        dpm($errors);
         module_load_include('inc', 'content', 'includes/content.crud');
         $field = content_fields($ahah_args[0], $form['#type_name']);
         $field['display_settings'][$ahah_args[1]]['settings'] = isset($field['display_settings'][$ahah_args[1]]['settings'])

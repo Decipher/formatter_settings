@@ -1,0 +1,5 @@
+name = Formatter Settings
+description = 'TODO'
+dependencies[] = content
+package = CCK
+core = 6.x

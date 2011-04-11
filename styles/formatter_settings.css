@@ -1,0 +1,19 @@
+/**
+ * @file
+ * Formatter Settings module CSS.
+ */
+
+#content-display-overview-form td {
+  vertical-align: top;
+}
+
+.formatter_settings-wrapper {
+  position: relative;
+}
+
+.formatter_settings-wrapper .field-formatter-settings-edit {
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 1;
+}

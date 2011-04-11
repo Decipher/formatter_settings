@@ -1,0 +1,324 @@
+<?php
+/**
+ * @file
+ * The core functions for the Formatter Settings module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function formatter_settings_menu() {
+  $items = array();
+
+  $items['ahah/formatter_settings'] = array(
+    'title' => 'Formatter Settings AHAH Callback',
+    'page callback' => 'formatter_settings_ahah',
+    'access arguments' => array('administer content types'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_nodeapi().
+ */
+function formatter_settings_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+  // Prevent against invalid 'nodes' built by broken 3rd party code.
+  if (isset($node->type) && $op == 'view') {
+    $node->content['#pre_render'][] = 'formatter_settings_nodeapi_pre_render';
+  }
+}
+
+/**
+ * Pre-render callback for hook_nodeapi().
+ *
+ * Provides context to formatters.
+ */
+function formatter_settings_nodeapi_pre_render($elements) {
+  foreach (element_children($elements) as $child) {
+    if (is_array($elements[$child]['field'])) {
+      foreach ($elements[$child]['field']['items'] as &$item) {
+        $item['#context'] = $elements[$child]['#context'];
+      }
+    }
+  }
+  return $elements;
+}
+
+/**
+ * Get's the Formatter Settings.
+ *
+ * A utility function to retrieve the necessary Formatter Settings for the
+ * supplied Formatter element.
+ *
+ * @param $element
+ *   The element provided to the Formatter for theming.
+ *
+ * @return
+ *   An array containing the context specific Formatter Settings.
+ */
+function formatter_settings_get($element) {
+  // Gather type information.
+  $type = content_types($element['#type_name']);
+  $fields = $type['fields'];
+
+  $settings = $fields[$element['#field_name']]['display_settings'][$element['#context']]['settings'];
+  return isset($settings[$element['#formatter']]) ? $settings[$element['#formatter']] : array();
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function formatter_settings_form_content_display_overview_form_alter(&$form, &$form_state) {
+  drupal_add_css(drupal_get_path('module', 'formatter_settings') . '/styles/formatter_settings.css');
+
+  // Gather type information.
+  $type = content_types($form['#type_name']);
+  $fields = $type['fields'];
+  $field_types = _content_field_types();
+
+  $contexts = content_build_modes($form['#contexts']);
+
+  if (!empty($fields)) {
+    array_unshift($form['#submit'], 'formatter_settings_form_content_display_overview_form_alter_submit');
+    $form['#prefix'] = "<div id='formatter_settings-form-wrapper'>{$form['#prefix']}";
+    $form['#suffix'] .= '</div>';
+
+    // Fields.
+    foreach ($fields as $name => $field) {
+      foreach ($contexts as $key => $value) {
+        // Attach AHAH behaviors.
+        $form[$name][$key]['format']['#ahah'] = array(
+          'path' => 'ahah/formatter_settings',
+          'wrapper' => 'formatter_settings-form-wrapper'
+        );
+
+        // Retain selected values after AHAH callback.
+        foreach (element_children($form[$name][$key]) as $child) {
+          $form[$name][$key][$child]['#default_value'] = isset($form_state['values']) ? $form_state['values'][$name][$key][$child] : $form[$name][$key][$child]['#default_value'];
+        }
+
+        $formatter_name = $form[$name][$key]['format']['#default_value'];
+        $formatter = _content_get_formatter($formatter_name, $fields[$name]['module']);
+        $settings_form = array();
+        $settings = isset($fields[$name]['display_settings'][$key]['settings']) ? $fields[$name]['display_settings'][$key]['settings'] : array();
+
+        // Invoke hook_formatter_settings_form().
+        if (function_exists($function = "{$formatter['module']}_formatter_settings_form")) {
+          if ($settings_form = $function($form['#type_name'], $name, $formatter_name, $settings[$formatter_name])) {
+            // Attach 'Config' button to formatter.
+            if (!isset($form_state['values']) || (isset($form_state['values']) && $form_state['values']['formatter_settings_edit'] != "{$name}-{$key}")) {
+              $form[$name][$key]['config'] = array(
+                'edit' => array(
+                  '#type' => 'image_button',
+                  '#src' => drupal_get_path('module', 'formatter_settings') . '/images/configure.png',
+                  '#value' => t('Configure'),
+                  '#ahah' => array(
+                    'path' => "ahah/formatter_settings/edit/{$name}/{$key}",
+                    'wrapper' => 'formatter_settings-form-wrapper'
+                  ),
+                  '#attributes' => array(
+                    'class' => 'field-formatter-settings-edit'
+                  ),
+                ),
+                'summary' => array(
+                  // Invoke hook_formatter_settings_summary().
+                  '#value' => function_exists($function = "{$formatter['module']}_formatter_settings_summary") ? $function($form['#type_name'], $name, $formatter_name, $settings[$formatter_name]) : '',
+                )
+              );
+            }
+
+            // Attach formatter settings form.
+            else {
+              $form['formatter_settings_edit'] = array(
+                '#type' => 'value',
+                '#value' => "{$name}-{$key}"
+              );
+
+              $title = $form[$name][$key]['format']['#options'][$form[$name][$key]['format']['#default_value']];
+              $form[$name][$key]['format'] = array(
+                '#type' => 'value',
+                '#value' => $form[$name][$key]['format']['#default_value'],
+              );
+
+              $form[$name][$key]['config'] = array(
+                '#value' => t('Format settings: !format', array('!format' => "<strong>{$title}</strong>")),
+                'settings' => array(
+                  $formatter_name => $settings_form,
+                ),
+                'actions' => array(
+                  '#type' => 'fieldset',
+                  'update' => array(
+                    '#type' => 'submit',
+                    '#value' => t('Update'),
+                    '#name' => "{$name}[{$key}][update]",
+                    '#ahah' => array(
+                      'path' => "ahah/formatter_settings/update/{$name}/{$key}",
+                      'wrapper' => 'formatter_settings-form-wrapper'
+                    ),
+                  ),
+                  'cancel' => array(
+                    '#type' => 'submit',
+                    '#value' => t('Cancel'),
+                    '#ahah' => array(
+                      'path' => 'ahah/formatter_settings/cancel',
+                      'wrapper' => 'formatter_settings-form-wrapper'
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+        }
+
+        $form[$name][$key]['settings'] = array(
+          '#type' => 'value',
+          '#value' => $settings,
+        );
+      }
+      $form[$name]['label']['format']['#default_value'] = isset($form_state['values']) ? $form_state['values'][$name]['label']['format'] : $form[$name]['label']['format']['#default_value'];
+    }
+  }
+}
+
+/**
+ * Submit handler.
+ */
+function formatter_settings_form_content_display_overview_form_alter_submit($form, &$form_state) {
+  // Gather type information.
+  $type = content_types($form['#type_name']);
+  $fields = $type['fields'];
+  $field_types = _content_field_types();
+
+  $contexts = content_build_modes($form['#contexts']);
+
+  switch ($form_state['clicked_button']['#value']) {
+    case t('Configure'):
+      $form_state['storage']['formatter_settings'] = TRUE;
+      $form_state['values']['formatter_settings_edit'] = str_replace('[', '-', str_replace('][config][edit]', '', $form_state['clicked_button']['#name']));
+      break;
+
+    case t('Update'):
+      $args = explode('[', str_replace('][update]', '', $form_state['clicked_button']['#name']));
+      $form_state['values'][$args[0]][$args[1]]['settings'] = isset($form_state['values'][$args[0]][$args[1]]['settings'])
+        ? array_merge($form_state['values'][$args[0]][$args[1]]['settings'], $form_state['values'][$args[0]][$args[1]]['config']['settings'])
+        : $form_state['values'][$args[0]][$args[1]]['config']['settings'];
+      unset($form_state['values']['formatter_settings_edit']);
+      break;
+
+    case t('Cancel'):
+      unset($form_state['values']['formatter_settings_edit']);
+      break;
+  }
+
+  // Cleanup $form_state['values'].
+  foreach ($fields as $name => $field) {
+    foreach ($contexts as $key => $title) {
+      unset($form_state['values'][$name][$key]['config']);
+    }
+  }
+}
+
+/**
+ * Implements hook_preprocess_content_display_overview_form().
+ */
+function formatter_settings_preprocess_content_display_overview_form(&$vars) {
+  $form = &$vars['form'];
+
+  foreach ($vars['rows'] as $delta => &$row) {
+    $field = $form['#fields'][$delta];
+    foreach ($vars['contexts'] as $context => $title) {
+      if (isset($form[$field][$context]['config'])) {
+        unset($form[$field][$context]['config']['#processed'], $form[$field][$context]['config']['#printed']);
+        $config = drupal_render($form[$field][$context]['config']);
+        $vars['submit'] = str_replace($config, '', $vars['submit']);
+        $row->{$context}->format = "<div class='formatter_settings-wrapper'>{$row->{$context}->format}{$config}</div>";
+      }
+    }
+  }
+}
+
+/**
+ * AHAH Callback.
+ */
+function formatter_settings_ahah() {
+  include_once('./' . drupal_get_path('module', 'content') . '/includes/content.admin.inc');
+
+  // Immediately disable devel shutdown functions so that it doesn't botch our
+  // JSON output.
+  $GLOBALS['devel_shutdown'] = FALSE;
+
+  if (empty($_POST['form_build_id'])) {
+    // Invalid request.
+    drupal_set_message(t('An unrecoverable error occurred.'));
+    print drupal_to_js(array('data' => theme('status_messages')));
+    exit;
+  }
+
+  // Load the form.
+  $form_state = array(
+    'rebuild' => TRUE,
+    'storage' => NULL,
+    'submitted' => FALSE
+  );
+  $form_build_id = $_POST['form_build_id'];
+  $form = form_get_cache($form_build_id, $form_state);
+  $args = $form['#parameters'];
+  $form_id = array_shift($args);
+  $form_state['post'] = $form['#post'] = $_POST;
+  $form['#programmed'] = $form['#redirect'] = FALSE;
+
+  // Process the form with drupal_process_form(), which calls the submit
+  // handlers that puts whatever was worthy of keeping in the $form_state.
+  drupal_process_form($form_id, $form, $form_state);
+
+  // Session messages would get displayed at the next regular request, but
+  // we're in AHAH here, so that won't happen. Make them go away.
+  unset($_SESSION['messages']);
+
+  // Save AHAH callback arguments.
+  $ahah_args = func_get_args();
+  if (count($ahah_args) > 0) {
+    switch(array_shift($ahah_args)) {
+      case 'edit':
+        $form_state['values']['formatter_settings_edit'] = implode('-', $ahah_args);
+        form_set_error(NULL, '', TRUE);
+        break;
+
+      case 'update':
+        $errors = form_set_error();
+        dpm($errors);
+        module_load_include('inc', 'content', 'includes/content.crud');
+        $field = content_fields($ahah_args[0], $form['#type_name']);
+        $field['display_settings'][$ahah_args[1]]['settings'] = isset($field['display_settings'][$ahah_args[1]]['settings'])
+          ? array_merge($field['display_settings'][$ahah_args[1]]['settings'], $form_state['values'][$ahah_args[0]][$ahah_args[1]]['config']['settings'])
+          : $form_state['values'][$ahah_args[0]][$ahah_args[1]]['config']['settings'];
+        content_field_instance_update($field, FALSE);
+        content_clear_type_cache();
+        unset($form_state['values']['formatter_settings_edit']);
+        break;
+
+      case 'cancel':
+        unset($form_state['values']['formatter_settings_edit']);
+        form_set_error(NULL, '', TRUE);
+        break;
+    }
+  }
+
+  $form = drupal_rebuild_form($form_id, $form_state, $args, $form_build_id);
+  unset($form['#action']);
+
+  // Render form.
+  $form['#theme'] = 'content_display_overview_form';
+  unset($form['#prefix'], $form['#suffix']);
+  $output = drupal_render($form);
+
+  // Attach any new Javascript.
+  $javascript = drupal_add_js(NULL, NULL);
+  if (isset($javascript['setting'])) {
+    $output .= '<script type="text/javascript">jQuery.extend(Drupal.settings, ' . drupal_to_js(call_user_func_array('array_merge_recursive', $javascript['setting'])) . ');</script>';
+  }
+
+  print drupal_to_js(array('status' => TRUE, 'data' => $output));
+}
